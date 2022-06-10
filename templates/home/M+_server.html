@@ -1,0 +1,19 @@
+{% extends 'home/base.html' %}
+{% load static %} <!-- all static founf in awsb.ddns.net/static. bokeh 2.3.0 works for c19 ensure venv is same ver bokeh -->
+{% block content %}
+<head>
+	<h2> {{ Intro | safe }} </h2>
+	<!-- h2> test request_handler {{ test | safe }} </h2 -->
+	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-2.3.0.min.js" crossorigin="anonymous"></script>
+	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-widgets-2.3.0.min.js" crossorigin="anonymous"></script>
+	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-tables-2.3.0.min.js" crossorigin="anonymous"></script>
+	<!--- COPY/PASTE SCRIPT HERE -->
+		{{ script | safe }}
+</head>
+<body>
+	<div>
+<!-- COPY/PASTE divs HERE
+		{{ div | safe }}-->
+	</div>
+</body>
+{% endblock %}
