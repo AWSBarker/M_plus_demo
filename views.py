@@ -1,222 +1,119 @@
-# added ECG
-from django.shortcuts import render
-
+# TODO dash or home warning if M+daily > today
+from django.shortcuts import render, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-
-import MySQLdb
-import MySQLdb.cursors
 import pandas as pd
+import numpy as np
 from bokeh.embed import server_document, components, server_session
-from bokeh.client import pull_session
 from bokeh.layouts import row, column
-from bokeh.models import ColumnDataSource, CDSView, GroupFilter, BooleanFilter, Select, DatetimeTickFormatter, HoverTool, \
-	NumeralTickFormatter, DateRangeSlider
-from bokeh.plotting import figure, show
-from bokeh.palettes import Category20c_20, Category20b_20
+from bokeh.plotting import figure
+from bokeh.models import CDSView, HoverTool, LabelSet, \
+	DatetimeTickFormatter, ColumnDataSource, \
+	LinearColorMapper, BasicTicker, ColorBar, HoverTool, \
+	PrintfTickFormatter, FixedTicker, IndexFilter
+from bokeh.transform import transform
 import datetime as dt
-import requests
+from datetime import timedelta
+from mdaily.models import MDaily, MOrg
+from django.db.models import Count, Max
+from slick_reporting.views import SlickReportView
+from trials.models import Ctgov1, Contacts
+from .models import Eliot
+from rest_framework.parsers import JSONParser
+from flatdict import FlatDict
+from django.contrib.auth.decorators import login_required, permission_required
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.views.generic import View, TemplateView
+
+from django.conf import settings
+from .serializers import EliotSerializer
+from django.http import JsonResponse
+from rest_framework.decorators import api_view
+from home.forms import ImeiForm
+from django.views.generic.edit import FormView
 import json
-from sqlalchemy import create_engine, exc
+from django.contrib import messages
+from django.views.decorators.cache import cache_page
+from django.utils.decorators import method_decorator
+import os
+from Mdb2 import MonthlyReportGM, GetIMEI, VSReport
+from Mapi2 import Org, Dev, Mapi, DBconx
 
-def home(request):
+from .eliot_update import run_redis
 
-	def db(sql):
-		connection = MySQLdb.connect(host='192.168.1.173', port=3306, user='pi',
-									 password='7914920', db='Health', cursorclass=MySQLdb.cursors.DictCursor)
-		conn = connection.cursor()  # setup the dropdowns dicts
-		conn.execute(sql)  # "SELECT * FROM countries")
-		r = conn.fetchall()  # tuple of dicts ({},{}..  ,)
-		conn.close()
-		connection.close()
-		return r
+class QS_AnyMeasure():
+	"""
+	For response : Return asdict of measures (val) as text for context display of Queryset from any device like:
+    For Admin : Return object :
+     device_imei, device_model, device_timezone, ... ts, val
+	"""
+	# kout is keys to show display units for Gtel and GW
+	kout = {'cholesterol' : 'TCH', 'ketone' : 'bK', 'uricacid' : 'UA', 'glucose' : 'BG',
+		 'spo2' : 'SpO2', 'temperature' : 'Temp', 'bodyweight' : 'weight'}
 
-	my_dict = {'basedir' : "", 'script' : "", 'div' : "", 'updated' : ""}
-	return render(request, 'home/home.html', my_dict)
+	def __init__(self, aqs):
+		self.recs = aqs #a QuerySet object like Eliot.objects.all()[:10] or Obj x.device_model
 
-def iframe_view(request):
-	bokeh_server_url = "https://awsb.ddns.net/flight"
-	context = {"graphic":"Slider", "ifr": bokeh_server_url}
-	return render(request, 'home/iframe.html' , context)
+	def asobj(self):
+		# return str as val for measured values in Admin for eliot, itasc
+		if self.recs.device_model in ['BP800', 'D40G', 'LS802-GP']:
+			if self.recs.metadata_measurementtype.lower() == 'bloodpressure':
+				return f"{self.recs.measurements_systolicbloodpressure_value}/{self.recs.measurements_diastolicbloodpressure_value} {self.recs.measurements_pulse_value} ({self.recs.measurements_annotations_irregularheartbeat})"
+			else:
+				return f"{self.recs.measurements_glucose_value} {self.recs.measurements_glucose_unit}"
+		elif self.recs.device_model == 'BS-2001-G1':
+			return f"{self.recs.measurements_bodyweight_value*0.001:.1f} Kg"
+		elif self.recs.device_model == 'BC800':
+			return f"{self.recs.measurements_bodyweight_value} Kg"
+		elif self.recs.device_model == 'PM100':
+			return "PDF"
+		elif self.recs.device_model == 'GTEL':
+			mt = self.recs.metadata_measurementtype.lower() #self.kin.get(self.recs.metadata_measurementtype.lower(), 'None')
+			try :
+				mv = getattr(self.recs, f"measurements_{mt}_value")
+				mu = getattr(self.recs, f"measurements_{mt}_unit")
+				return f"{mt} {mv} {mu}"
+			except:
+				return 'some error'
+		elif self.recs.device_model == 'GW9017':
+			#SpO2 (pulse), bodytemperature, bloodpressure (dia/sys/pulse)
+			if self.recs.metadata_measurementtype.lower() == 'bloodpressure':
+				return f"{self.recs.measurements_systolicbloodpressure_value}/{self.recs.measurements_diastolicbloodpressure_value} {self.recs.measurements_pulse_value}"
+			elif self.recs.metadata_measurementtype.lower() == 'bodytemperature':
+				return f"{self.recs.measurements_temperature_value} {self.recs.measurements_temperature_unit}"
+			elif self.recs.metadata_measurementtype.lower() == 'spo2':
+				return f"{self.recs.measurements_spo2_value}{self.recs.measurements_spo2_unit} {self.recs.measurements_pulse_value}bpm"
+			else: # weight, glucose
+				mt = self.recs.metadata_measurementtype.lower() #self.kin.get(self.recs.metadata_measurementtype.lower(), 'None')
+				try :
+					mv = getattr(self.recs, f"measurements_{mt}_value")
+					mu = getattr(self.recs, f"measurements_{mt}_unit")
+					return f"{mv} {mu}"
+				except:
+					return 'gw data error'
 
-# /eliot/bp
-'''
-
-GW
-
-[SQL: INSERT INTO eliot2 (`metadata_correlationId`, `metadata_receivedTime`, `metadata_deviceGroups`, `metadata_measurementType`, device_id, `device_serialNumber`, `device_IMEI`, device_manufacturer, device_model, device_timezone, `measurements_SpO2_value`, `measurements_SpO2_unit`, `measurements_SpO2_isInRange`, measurements_device_id, `measurements_device_serialNumber`, `measurements_device_IMEI`, measurements_device_manufacturer, measurements_device_model, measurements_device_timezone, measurements_pulse_value, measurements_pulse_unit, `measurements_pulse_isInRange`, measurements_timestamp) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)]
-[parameters: ('8f8e12df-6bbb-4d8a-a4fe-f61ab48c5cb2', '2021-05-13T14:16:44.334477311Z', 'N/A', 'SpO2', 'Fora:GW9017:9017720280000026', '9017720280000026', '355442076664122', 'Fora', 'GW9017', 'UTC', 99, '%', 1, 'Fora:PO200:825522022026250B', '825522022026250B', '', 'Fora', 'PO200', 'UTC', 53, 'bmp', 1, '2021-05-13T14:16:44.334477666Z')]
-(Background on this error at: http://sqlalche.me/e/13/e3q8) 
-
-error with db (MySQLdb._exceptions.OperationalError) (1054, "Unknown column 'measurements_device_id' in 'field list'")
-[SQL: INSERT INTO eliot2 (`metadata_correlationId`, `metadata_receivedTime`, `metadata_deviceGroups`, `metadata_measurementType`, device_id, `device_serialNumber`, `device_IMEI`, device_manufacturer, device_model, device_timezone, 
-measurements_device_id, `measurements_device_serialNumber`, `measurements_device_IMEI`, measurements_device_manufacturer, measurements_device_model, measurements_device_timezone, 
-`measurements_diastolicBloodPressure_value`, `measurements_diastolicBloodPressure_unit`, `measurements_diastolicBloodPressure_isInRange`, `measurements_meanBloodPressure_value`, `measurements_meanBloodPressure_unit`, `measurements_meanBloodPressure_isInRange`, measurements_pulse_value, measurements_pulse_unit, `measurements_pulse_isInRange`, `measurements_systolicBloodPressure_value`, `measurements_systolicBloodPressure_unit`, `measurements_systolicBloodPressure_isInRange`, measurements_timestamp) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)]
-[parameters: ('b71879bd-eaa1-439c-bd8a-c8a7fcda1622', '2021-05-13T10:57:53.84001981Z', 'N/A', 'BloodPressure', 'Fora:GW9017:9017720280000026', '9017720280000026', '355442076664122', 'Fora', 'GW9017', 'UTC', 'Fora:P30:312942014000992E', '312942014000992E', '', 'Fora', 'P30', 'UTC', 91, 'mmHg', 1, 107, 'mmHg', 1, 78, 'bpm', 1, 141, 'mmHg', 1, '2021-05-13T10:57:53.840020013Z')]
-(Background on this error at: http://sqlalche.me/e/13/e3q8) 
- id = head : {'Host': 'awsb.ddns.net', 'Connection': 'upgrade', 'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '3.125.181.80, 192.168.1.173', 'X-Original-Uri': '/eliot/bp', 'X-Server-Port': '443', 'X-Server-Addr': '192.168.1.106', 'X-Real-Ip': '192.168.1.173', 'Content-Length': '787', 'X-Forwarded-Port': 'https', 'X-Correlation-Id': 'b71879bd-eaa1-439c-bd8a-c8a7fcda1622', 'X-Amzn-Trace-Id': 'Root=1-609d0631-2ea8ab10399c82ba0f9a6fc3;Parent=a01bc16546842cde;Sampled=1', 'Content-Type': 'application/json; charset=utf-8', 'Authorization': 'Basic QVdTQjpBV1NC', 'Accept': 'application/json', 'Accept-Encoding': 'gzip', 'User-Agent': 'Go-http-client/2.0'}
-type :  <class 'dict'> 
- 
- data : {'metadata': {'correlationId': 'b71879bd-eaa1-439c-bd8a-c8a7fcda1622', 'receivedTime': '2021-05-13T10:57:53.84001981Z', 'deviceGroups': [], 'measurementType': 'BloodPressure'}, 
- 'device': {'id': 'Fora:GW9017:9017720280000026', 'serialNumber': '9017720280000026', 'IMEI': '355442076664122', 'manufacturer': 'Fora', 'model': 'GW9017', 'timezone': 'UTC'}, 
- 'measurements': {'device': {'id': 'Fora:P30:312942014000992E', 'serialNumber': '312942014000992E', 'IMEI': '', 'manufacturer': 'Fora', 'model': 'P30', 'timezone': 'UTC'}, 
- 	'diastolicBloodPressure': {'value': 91, 'unit': 'mmHg', 'isInRange': True}, 'meanBloodPressure': {'value': 107, 'unit': 'mmHg', 'isInRange': True}, 'pulse': {'value': 78, 'unit': 'bpm', 'isInRange': True}, 'systolicBloodPressure': {'value': 141, 'unit': 'mmHg', 'isInRange': True}, 'timestamp': '2021-05-13T10:57:53.840020013Z'}}
-
-Gtel
-SQL: INSERT INTO eliot2 (`metadata_correlationId`, `metadata_receivedTime`, `metadata_deviceGroups`, `metadata_measurementType`, device_id, `device_serialNumber`, `device_IMEI`, `device_IMSI`, device_manufacturer, device_model, device_timezone, `device_additionalAttributes_deviceVer`, measurements_cholesterol_value, measurements_cholesterol_unit, `measurements_cholesterol_isInRange`, measurements_timestamp) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)]
-[parameters: ('ac962b83-a9db-4e0a-bdb0-3e4e237fea22', '2021-05-08T09:10:20.922129883Z', 'N/A', 'Cholesterol', 'TaiDoc:GTEL:412222032002106B', '412222032002106B', '900000000000008', '354033090695159', 'TaiDoc', 'GTEL', 'UTC', 'V1 2020.09.02', 189, 'mg/dL', 1, '2021-05-08T09:10:20.922130108Z')]
-(Background on this error at: http://sqlalche.me/e/13/e3q8) 
-
- id = head : {'Host': 'awsb.ddns.net', 'Connection': 'upgrade', 'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '18.184.195.98, 192.168.1.173', 'X-Original-Uri': '/eliot/bp', 'X-Server-Port': '443', 'X-Server-Addr': '192.168.1.106', 'X-Real-Ip': '192.168.1.173', 'Content-Length': '529', 'X-Forwarded-Port': 'https', 'X-Correlation-Id': 'ac962b83-a9db-4e0a-bdb0-3e4e237fea22', 'X-Amzn-Trace-Id': 'Root=1-6096557d-75f768c76bea0a805aa294eb;Parent=7394bf22a5134547;Sampled=1', 'Content-Type': 'application/json; charset=utf-8', 'Authorization': 'Basic QVdTQjpBV1NC', 'Accept': 'application/json', 'Accept-Encoding': 'gzip', 'User-Agent': 'Go-http-client/2.0'}
-type :  <class 'dict'> 
- data : {'metadata': {'correlationId': 'ac962b83-a9db-4e0a-bdb0-3e4e237fea22', 'receivedTime': '2021-05-08T09:10:20.922129883Z', 'deviceGroups': [], 'measurementType': 'Cholesterol'}, 
- 'device': {'id': 'TaiDoc:GTEL:412222032002106B', 'serialNumber': '412222032002106B', 'IMEI': '900000000000008', 'IMSI': '354033090695159', 'manufacturer': 'TaiDoc', 'model': 'GTEL', 'timezone': 'UTC', 'additionalAttributes': {'deviceVer': 'V1 2020.09.02'}}, 
- 'measurements': {'cholesterol': {'value': 189, 'unit': 'mg/dL', 'isInRange': True}, 'timestamp': '2021-05-08T09:10:20.922130108Z'}}
-
- measurements_bodyComposition_value, float
-            measurements_bodyComposition_unit, smalltext
-            measurements_bodyComposition_isInRange bool
- measurements_bodyComposition_bodyWeight, float
-            measurements_bodyWeight_unit small text
-            measurements_bodyWeight_isInRange bool
-metadata_correlationId,metadata_receivedTime,metadata_deviceGroups,metadata_measurementType,
-device_id,device_serialNumber,device_IMEI,device_IMSI,device_manufacturer,device_model,device_timezone,
-device_additionalAttributes_currentDeviceTime,device_additionalAttributes_deviceType,device_additionalAttributes_deviceVer,
-measurements_bodyComposition_value,measurements_bodyComposition_unit,measurements_bodyComposition_isInRange,
-measurements_bodyWeight_value,measurements_bodyWeight_unit,measurements_bodyWeight_isInRange,measurements_timestamp
-0,440e7d04-8fa7-47aa-a98b-86eba1a65b32,2020-09-27T11:23:39.869332582Z,[],BodyWeightComposition,EBMTech:BC800:003-204046206948494-25,003-204046206948494-25,900000000000003,204046206948494,EBMTech,BC800 3G,UTC,0.000000,BC800 3G,V1.0,517,Ω,True,64.7,kg,True,2020-09-27T11:23:39.869332689Z
-'''
-
-@csrf_exempt
-#@require_POST
-def eliot(request):
-	engine = create_engine('mysql+mysqldb://pi:7914920@192.168.1.173:3306/Health?charset=utf8')
-
-	if request.method == 'POST':
-		head = request.headers
-		jsondict = json.loads(request.body) #request.body) # dict {{metadata},{device },{measurements}}
-		data_df = pd.json_normalize(jsondict, sep='_')  # field.ref_values
-		data_df['metadata_deviceGroups'] = "N/A"
-		#data.to_csv('/home/ab/data.csv', index=False)
-		# determine device type "metadata_measurementType": "BloodPressure" or "BodyWeightComposition
-		# actuall doest matter which other values = null
-		# transtek'model': 'BS-2001-G1' remove 'measurements_annotations_measuredUnit'
-		try:
-			if data_df.metadata_measurementType[0] == 'BodyWeightComposition':
-				with engine.connect() as con:
-					data_df.to_sql('eliot2', con=con, if_exists='append', index=False)
-			elif data_df.device_model[0] == 'BS-2001-G1':
-				with engine.connect() as con:
-				# remove col 'measurements_annotations_measuredUnit'
-					data_df.drop(columns=['measurements_annotations_measuredUnit'], axis=1, inplace=True)
-					data_df.to_sql('eliot2', con=con, if_exists='append', index=False)
-
-			elif data_df.device_model[0] == 'PM100':
-				if jsondict['measurements'].keys().__contains__('documents'): # a PDF
-					base64_img = jsondict['measurements']['documents']['ecgReportBase64PDF']
-					#base64_img_bytes = base64_img.encode('utf-8')
-					jsondatatuple = (data_df.measurements_timestamp[0], base64_img.encode('utf-8'))
-					data_df.drop(columns="measurements_documents_ecgReportBase64PDF", inplace=True)
-				else: # RAW
-					data_df.drop(columns="measurements_ecgSamples_samples", inplace=True)
-					jsondatatuple = (data_df.measurements_timestamp[0], json.dumps(data_df['measurements']["ecgSamples"]['samples'])) #json.dumps(data['measurements']["ecgSamples"]['samples']))
-				with engine.connect() as con:
-					data_df.to_sql('eliot2', con=con, if_exists='append', index=False)
-					sql = """INSERT INTO eliot2 (measurements_timestamp, measurements_ecgSamples_samples) VALUES(%s,%s) ON DUPLICATE KEY UPDATE measurements_timestamp = VALUES(measurements_timestamp), measurements_ecgSamples_samples = VALUES(measurements_ecgSamples_samples)""" #, metadata_correlationId = VALUES(metadata_correlationId)
-
-				try:
-					db = MySQLdb.connect(host='192.168.1.173', port=3306, user='pi', password='7914920', db='Health', charset='utf8')
-					with db.cursor() as cur:# setup the dropdowns dicts
-						a = cur.execute(sql, jsondatatuple) #"SELECT * FROM countries")
-						db.commit()
-						print(f'samples data updated {a}')
-				except MySQLdb.Error as e:
-						print(f'mysql error {e}')
-				finally:
-					if db.open:
-						db.close()
-
-			else: # BloodPessure (redundant but incase required)
-				with engine.connect() as con:
-					data_df.to_sql('eliot2', con=con, if_exists='append', index=False)
-
-			with open('/home/ab/jsondata2.json', 'a') as j:
-				json.dump(jsondict, j)
-
-		except exc.SQLAlchemyError as e:
-			with open('/home/ab/eliot2_error.log', 'a') as f:
-				f.write(f'\n {dt.datetime.now().isoformat()}\n')
-				f.write(f'\n error with db {e} \n id = ')
-				f.write(f'head : {head}\n')
-				f.write(f'type :  {type(jsondict)} \n data : {str(jsondict)}\n')
-		except Exception as e:
-			with open('/home/ab/eliot2_error.log', 'a') as f:
-				f.write(f'\n {dt.datetime.now().isoformat()}\n')
-				f.write(f'\n unknown error {e}\n ')
-		finally:
-			my_dict = {'intro' : 'ELIOT readings', 'script' : str(data_df)}
-			return render(request, 'home/test_server.html', my_dict)
-
-	else : # display the results : 5 limit ordered by ts
-
-		sd = server_document('https://awsb.ddns.net/eliot/eliot')
-
-		sql = f"SELECT device_IMEI, device_model, device_timezone," \
-		   f"measurements_timestamp, measurements_pulse_value, measurements_systolicBloodPressure_value, " \
-		   f"measurements_diastolicBloodPressure_value, measurements_glucose_value, measurements_glucose_unit, " \
-		   f"measurements_bodyWeight_value, measurements_bodyWeight_unit, measurements_bodyComposition_value,measurements_cholesterol_value, " \
-		   f"measurements_cholesterol_unit, measurements_uricacid_value, measurements_uricacid_unit, measurements_ketone_value, " \
-		   f"measurements_ketone_unit, measurements_hematocrit_value, measurements_hematocrit_unit,measurements_SpO2_value, " \
-		   f"measurements_SpO2_unit, measurements_temperature_value, measurements_temperature_unit,metadata_measurementType, "\
-		   f"measurements_ecgSamples_samples " \
-		   f"from eliot2 ORDER BY measurements_timestamp DESC LIMIT 7"
-
-		cols = ['device_IMEI', 'device_model', 'device_timezone', 'measurements_timestamp',
-				'measurements_pulse_value', 'measurements_systolicBloodPressure_value', 'measurements_diastolicBloodPressure_value',
-				'measurements_glucose_value', 'measurements_glucose_unit', 'measurements_bodyWeight_value', 'measurements_bodyWeight_unit', 'r',
-				'measurements_cholesterol_value', 'measurements_cholesterol_unit',
-				'measurements_uricacid_value', 'measurements_uricacid_unit',
-				'measurements_ketone_value', 'measurements_ketone_unit',
-				'measurements_hematocrit_value', 'measurements_hematocrit_unit',
-				'measurements_SpO2_value','measurements_SpO2_unit',
-				'measurements_temperature_value', 'measurements_temperature_unit',
-				'metadata_measurementType', 'measurements_ecgSamples_samples'
-				]
-
-		db = MySQLdb.connect(host='192.168.1.173', port=3306, user='pi', password='7914920', db='Health', charset='utf8')
-		with db.cursor() as cur:# setup the dropdowns dicts
-			cur.execute(sql) #"SELECT * FROM countries")
-			r = cur.fetchall() # tuple of dicts ({},{}..  ,)
-		db.close()
-
-		df = pd.DataFrame([i for i in r], columns=cols)
-		#df.set_index('measurements_timestamp', drop=True, inplace=True)
-		#df = df.sort_index(ascending=True)
-		# create val and measure fields
-		k = {'cholesterol' : 'TCH', 'ketone' : 'bK', 'uricacid' : 'UA', 'glucose' : 'BG', 'SpO2' : 'SpO2', 'temperature' : 'Temp', 'bodyWeight' : 'weight'}
-		for bm in k.keys() :    #['cholesterol', 'ketone', 'uricacid', 'glucose']:
+	def asdict(self):
+		# return dict for display in eliot and itasc
+		self.cols = list(self.recs.model().__dict__.keys())[1:] # _state is removed
+		df = pd.DataFrame(self.recs.values_list(*self.cols), columns= self.cols)
+		for bm in self.kout.keys() :    #['cholesterol', 'ketone', 'uricacid', 'glucose']:
 			bmv = f'measurements_{bm}_value'
 			bmu = f'measurements_{bm}_unit'
 			df.loc[df[bmv].notnull(),'val'] = df[bmv].fillna(0).map(str) + ' ' + df[bmu]
-			df.loc[df[bmu].notnull(),'measure'] = k[bm]
-
-		# # backfill BS-2001-G1 into Kg if measurements_bm_unit == 'g' #some error with float and none, don't know why 7.1.22
+			df.loc[df[bmu].notnull(),'measure'] = self.kout[bm]
 		try:
-			df.loc[df['device_model'] == 'BS-2001-G1', 'val'] = df['measurements_bodyWeight_value'].apply(lambda x: f'{x*0.001:.1f} Kg')
+			df.loc[df['device_model'] == 'BS-2001-G1', 'val'] = df['measurements_bodyweight_value'].apply(lambda x: f'{x*0.001:.1f} Kg')
 		except:
-			df.loc[df['device_model'] == 'BS-2001-G1', 'val'] = df['measurements_bodyWeight_value']
+			df.loc[df['device_model'] == 'BS-2001-G1', 'val'] = df['measurements_bodyweight_value']
 
 		# backfill BP and Pulse
-		sys = f'measurements_systolicBloodPressure_value'
-		df.loc[df[sys].notnull(),'val'] = df.measurements_systolicBloodPressure_value.fillna(0).astype(int).map(str) +\
-										'/'+ df.measurements_diastolicBloodPressure_value.fillna(0).astype(int).map(str)+\
+		sys = f'measurements_systolicbloodpressure_value'
+		df.loc[df[sys].notnull(),'val'] = df.measurements_systolicbloodpressure_value.fillna(0).astype(int).map(str) +\
+										'/'+ df.measurements_diastolicbloodpressure_value.fillna(0).astype(int).map(str)+\
 										', Pulse ' + df.measurements_pulse_value.fillna(0).astype(int).map(str)
 		df.loc[df[sys].notnull(),'measure'] = 'BP'
-
 		# backfill Pulse into SpO2 vale
-		sys = f'measurements_SpO2_value'
+		sys = f'measurements_spo2_value'
 		df.loc[df[sys].notnull(), 'val'] += ', Pulse ' + df.measurements_pulse_value.fillna(0).astype(int).map(str)
-		#df.loc[df[sys].notnull(), 'measure'] = 'BP'
-
 		# backfill ECG
 		# 1. Ch1 numberOfSamples = json.loads(df.measurements_ecgSamples_samples[0]
 		# 2. PDF imag file with URL as link (val = https://
@@ -224,36 +121,449 @@ def eliot(request):
 		df.loc[df['device_model'] == 'PM100', 'measure'] = 'ECG'
 		# detect type of measure raw or image
 		df.loc[df['device_model'] == 'PM100', 'val'] = 'PDF' # raw =  f"Samples Ch1: {json.loads(df.measurements_ecgSamples_samples[0])[0]['numberOfSamples']} Ch2: {json.loads(df.measurements_ecgSamples_samples[0])[0]['numberOfSamples']}"
-
 		df.val = df.measure + ' ' + df.val
 		df.rename(columns={'measurements_timestamp': 'ts'}, inplace=True)
-
 		df.ts = df.ts.dt.strftime('%d %b %X')
 		df.drop(df.columns[df.columns.str.contains('measure')], axis=1, inplace=True)
+#		print(df.head())
+		return df.to_dict('records') # list of each measurement as dict
 
-		eliotdict = df.to_dict('records') # list of each measurement as dict
+class Tool_IMEI(FormView):
+	"""
+	ask for IMEI, return Mapi2 resful json details
+	keep list of last IMEIs beside the input box for copy/paste
+	"""
+	template_name = 'home/getimei.html'
+	form_class = ImeiForm
+	initial = {'imei' :358244086394972}
+	list_imei = set()
+
+	def get(self, request, *args, **kwargs):
+		form = self.form_class(initial=self.initial)
+		return render(request, self.template_name, {'form': form, 'list_imei': self.list_imei})
+
+	def post(self, request, *args, **kwargs):
+		form = self.form_class(request.POST)
+		if form.is_valid(): # <process form cleaned data>
+			self.list_imei.add(form.cleaned_data['imei'])
+			self.d = Dev(form.cleaned_data['imei']).get_device_details() # dict. 'owner'
+			if 'message' in self.d:
+				messages.error(request, f"Error {self.d['message']} in M+hub\n")
+				return render(request, self.template_name, {'form': form, 'list_imei': self.list_imei})
+			else:
+				#messages.success(request, f"Found {form.cleaned_data['imei']} in API\n")
+				o = Org(self.d['owner']).get_org_name()
+				self.d['owner'] = self.d['owner'] + ' (' + o + ')'
+				jso = json.dumps(self.d, indent=4, sort_keys=True)
+				script, div = self.imei_display()
+				#return JsonResponse(d, safe=False)
+				return render(request, "home/json_out.html", {'form': form, 'list_imei': self.list_imei, 'jsondata' : jso, 'script':script, 'div':div})
+		else:
+			messages.error(request, '*')
+
+		storage = messages.get_messages(request)
+		storage.used = True
+		return render(request, self.template_name, {'form': form, 'list_imei': self.list_imei})
+
+	def imei_display(self):
+		i = GetIMEI((int(self.d['imei']))).imeidf()
+		if type(i) == str or len(i) ==0:
+			return ('no recorded measures', 'in M+ daily, check Org is in M+ Orgs')
+		else:
+			i['d'] = i['count'].diff()
+			imax = i['count'].max()
+			source1 = ColumnDataSource(i)
+			p = figure(title=f"{self.d['imei']} Measures (total {imax})",width=600, height=100,
+					   x_axis_type='datetime', y_range=(0,1), x_range=(i.index.min(), i.index.max()),
+					   tools = "pan,wheel_zoom,reset", toolbar_location="above") #, toolbar_location=None)
+			p.add_tools(HoverTool(tooltips=[('N measures', "@d"), ('dated', "@last_measure_at{%d%b%y}")],
+					  formatters = {"@last_measure_at": "datetime"},
+						mode='vline'))
+			p.circle(x='last_measure_at', y=0.5, size='d', source=source1)
+			p.yaxis.visible = False
+			p.ygrid.visible = False
+			p.xaxis[0].formatter = DatetimeTickFormatter(days='%d%b%y')
+			p.title.text_font_size = "16px"
+			return components(p)
+
+class CTView1(SlickReportView):
+	report_model = Ctgov1
+	date_field = 'updated'
+	columns = ['nct_id', 'updated', 'brief_title', 'drank_final', 'alloc__username']
+
+class Home(TemplateView):
+	template_name = 'home/home.html'
+
+class Library(TemplateView):
+	template_name = 'home/library.html'
+
+@method_decorator(cache_page(90), name='get')
+class Home2(LoginRequiredMixin, TemplateView):
+	"""
+	- Dash  	KPIs : last updates to db.
+	- measures by client this week (daystack) !!! If ZERO !!!
+	- total measures by clients by month stack
+	- total measures by device type
+	- new devices (by org)
+"""
+	template_name = 'home/home2.html'
+	login_url = '/admin/login'
+	redirect_field_name = 'redirect_to'
+	model= Eliot
+
+	def get(self, request, *args, **qargs):
+		fleet_dict = MOrg.objects.fleet_size() # MDevOwn now owner__showas NOT org__showas, fleetsize
+		mtw = MDaily.objects.measured_this_week().values('org_id__showas').annotate(c=Count('imei', distinct=True))
+		mtd = MDaily.objects.measured_today().values('org_id__showas').annotate(c=Count('imei', distinct=True))
+		#test1 = MDaily.objects.measured_since()
+		#print(test1.info())
+		#print(test1.head())
+		dmax =mtw.aggregate(dmax=Max('c')).get('dmax')
+		last_record = MDaily.objects.latest_measure()
+		dffs=pd.DataFrame(list(fleet_dict))
+		dffs.rename(columns={'owner__showas': 'org__showas'}, inplace=True)
+		dfmtw = pd.DataFrame(list(mtw))
+		dfmtw.rename(columns={'org_id__showas': 'org__showas'}, inplace=True)
+		df = dffs.merge(dfmtw, how='left', on='org__showas') #, right_on=['org_id__showas'])
+		df.fillna(0, axis=0, inplace=True)
+		df = df.astype(str)
+		df.reset_index(inplace=True)
+		df2 = pd.DataFrame(list(mtd))
+		df3 = MDaily.objects.measure1st_d().loc['2022-01-01':dt.datetime.now()] # 11thNov start of MDaily
+		# need list of X_range outside CDS
+		source1 = ColumnDataSource(df) # showas, sum wk measures, fs
+		source2 = ColumnDataSource(df2)
+		source3 = ColumnDataSource(df3)
+
+		plot1 = figure(width = 480, height = 360, x_range=df.org__showas.to_list(),y_range=(-99,dmax+50),
+					   y_axis_label = 'Fleet size       Active devices (wk / day )   ',
+					   title='Active Devices by Org: last week, yesterday. Fleet size',
+					   toolbar_location=None)
+		plot1.vbar(x='org__showas', top='c', width=0.9, source=source1)
+		plot1.vbar(x='org_id__showas', top='c', width=0.1, source=source2, color = 'white')
+
+		fslabels = LabelSet(x='index', y= -30, text='fs', source=source1, angle =-0.7,
+							x_offset=0, y_offset=0, render_mode='canvas',
+							text_font_size='9pt', text_color='black')
+		plot1.toolbar.active_drag = None
+		plot1.add_layout(fslabels)
+		plot1.xaxis.major_label_orientation = 'vertical'
+
+		plot2 = figure(width = 480, height = 360, x_axis_type='datetime',
+					   title='New devices (1st measure) by day, for all Orgs shown  ', toolbar_location='right')
+		plot2.vbar(x='xax', top='imei', width=24*60*60*1000*1, source=source3)
+		plot2.line(x='xax', y='roll', color='red', line_width=3, legend_label = 'monthly rolling average', source=source3)
+		plot2.xaxis.formatter = DatetimeTickFormatter(months="%d %b %y")
+		plot2.toolbar.active_drag = None
+
+		script, div = ('hello', request.user.username) #components(plot1)
+		script2, div2 = components(row(plot1,plot2)) #,row(plot1,plot2)))
+		my_dict = {'fleet_dict' : fleet_dict, 'script' : script, 'div' : div, 'daily' : mtw, 'last_record' : last_record, 'script2' : script2, 'div2' : div2}
+
+		return render(request, self.template_name, my_dict)
+
+@login_required(login_url='/admin/login')
+def help(request):
+	with DBconx() as d:
+		adata = d.data_folder
+	my_dict = {'user' : request.user.username, 'session' :  request.session, 'adata' : adata}
+	return render(request, 'home/help.html', my_dict)
+
+@login_required(login_url='/admin/login')
+def tools(request):
+	last_mon = (dt.datetime.today().replace(day=1)-timedelta(days=1)).strftime('%B')
+	return render(request, 'home/tools.html', {'last_mon': last_mon})
+
+@cache_page(300)
+@login_required(login_url='/admin/login')
+def tools_orgs(request):
+	all_orgs = Org().get_all_orgs()
+	return render(request, 'home/all_orgs.html', {'all_orgs': all_orgs})
+
+@cache_page(300)
+@login_required(login_url='/admin/login')
+def tools_bad_date(request):
+	bd = MDaily.objects.wrong_date()
+	return render(request, 'home/bad_date.html', {'bad_dates': bd})
+
+@cache_page(60) #turn off cache - need refresh
+@login_required(login_url='/admin/login')
+def tools_uptime(request):
+	# p0 produces the 24hr heatmap, crontab injects past2hour.png into uptime.html
+	#lookback = 90
+	#now = dt.datetime.now()
+
+	df1 = MDaily.objects.measured_1d()
+	df1.columns = ['last', 'count']
+	df1.astype({'count' : np.int16}) # no effect 'last' : '<M8[s]'})
+	df1.set_index('last', drop=True, inplace=True)
+	last_measure = MDaily.objects.latest_measure().get('last_measure_at').strftime('%y-%m-%d %H:%M:%S')
+	last_checked = MDaily.objects.last_checked().get('checked_on').strftime('%y-%m-%d %H:%M:%S') # {'checked_on' :dt.dt}
+
+#-- cut here from try.alarms
+	df1 = df1.resample('H').count()
+	df1.fillna(0, inplace=True)
+	#yrange = df1.index.date
+	xrange = [0, 24] #dt(2022,10,16,0).hour,dt(2022,10,16,23).hour]
+	df1['hour'] = df1.index.hour
+	df1['date'] = df1.index.date #.astype('category')
+	dfgb = df1.groupby(['date', 'hour']).sum().reset_index()
+	source = ColumnDataSource(dfgb)
+
+	today_view = CDSView(source=source, filters=[IndexFilter(dfgb[dfgb.date==dt.datetime.now().date()].index.to_list())]) #dt.now().strftime('%Y-%m-%d'))])
+	print(today_view.filters[0].indices)
+	colors = ["red", "gold", "yellowgreen", "green"]
+	mapper = LinearColorMapper(palette=colors, low=0, high=len(colors), nan_color='red')
+
+	p0 = figure(title=f"Last measure @ {last_measure}", height= 120, width=840,
+			   x_range=xrange,x_axis_label =None, x_axis_location ='above', #, x_axis_type='datetime'
+			   y_axis_label =f'Today', y_axis_type='datetime',
+			   tools="", toolbar_location=None
+			   )
+
+	p0.rect(y='date', x='hour', width=0.99, height=0.99, source=source, view=today_view,
+			   fill_color=transform('count', mapper), line_color=None,
+		   )
+	p0.xaxis.ticker = FixedTicker(ticks=[0,2,4,6,8,10,12,14,16,18,20,22,24])
+	p0.xaxis.formatter = PrintfTickFormatter(format="%02s:00")
+	p0.xaxis.major_label_orientation = 0.6
+	p0.yaxis.major_tick_line_color = None
+	p0.yaxis.major_label_text_color = None
+
+	hovertool= HoverTool(tooltips=[("date", "@date{%y-%m-%d}"), ("hour", "@hour"), ("measures", "@count"),], formatters={"@date" : 'datetime'})
+	p0.add_tools(hovertool)
+
+	# p = figure(title=f"", width=840,
+	# 		   x_range=xrange, x_axis_label =None, x_axis_location = None,
+	# 		   y_axis_label =f'Last {lookback} days',y_axis_type='datetime',
+	# 		   tools="", toolbar_location=None,
+	# 		   )
+	#
+	# p.rect(y='date', x='hour', width=1, height=3600*24*1000, source=source,
+	# 		   fill_color=transform('count', mapper), line_color="darkgreen",
+	# 	   )
+	# p.yaxis.major_tick_line_color = None
+	# p.yaxis.major_label_text_color = None
+	# color_bar = ColorBar(color_mapper=mapper, major_label_text_font_size="10px",
+    #                  ticker=BasicTicker(desired_num_ticks=len(colors)),
+    #                  label_standoff=5, border_line_color=None,
+    #                  title='Zero measures (system down?)                              very low 1                          '
+    #                        '                low  2                                   normal > 3',
+    #                  height=10
+    #                  )
+	# p.add_layout(color_bar, 'below')
+	#
+	# hovertool1= HoverTool(tooltips=[("date", "@date{%y-%m-%d}"), ("hour", "@hour"), ("measures", "@count"),], formatters={"@date" : 'datetime'})
+	# p.add_tools(hovertool1)
+
+#-- cut here from try.alarms
+	script, div = components(p0) #,row(plot1,plot2)))
+	return render(request, 'home/uptime.html', {'script': script, 'div': div, 'last_checked' : last_checked})
+
+def scanfiles():
+	with DBconx() as d:
+		apath = d.data_folder
+	td = (dt.datetime.now() - dt.timedelta(hours=24)).timestamp()
+	return sorted((f for f in os.scandir(apath) if f.name.endswith(".xlsx") and f.stat().st_ctime > td), key=lambda f: f.stat().st_ctime, reverse=True)
+# def get_today_xlsx():
+# 	path = os.path.dirname(settings.MEDIA_ROOT) # '/mnt/bitnami/home/bitnami/sharepoint/data'
+# 	td = (dt.datetime.now() - timedelta(days=1)).timestamp()
+# 	for root, _, files in os.walk(path):
+# 		for file in files:
+# 			if file.endswith('.xlsx'):
+# 				if os.path.getctime(os.path.join(root, file)) > td:
+# 					yield (file, os.path.join(root, file))
+#@cache_page(300)
+@login_required(login_url='/admin/login')
+def tools_file_download(request):
+	# nginx server media for download in website/data/ so URL needs data prefix
+	filelist = [(f.name, f.path, dt.datetime.fromtimestamp(f.stat().st_ctime).isoformat()) for f in scanfiles()]
+	return render(request, 'home/files_list.html', {'files': filelist})
+
+@login_required(login_url='/admin/login')
+def tools_gmon(request):
+	# before monthly report run update owner
+	# save               self.filename = f"{DBconx.data_folder}/GM_rep_{dt.now().strftime('%y%m%d_%H%M')}.xlsx"
+	# nginx server demo.medisante-group.com/data/
+	# BELOW OWNER UPDATE NOW DONE IN GETDF FOR GM
+	# allorgs = Mapi().getOrgs()
+	# iodict= Org.getOrg_ID_dict()
+	# for o in allorgs:
+	# 	adevs = Org(o).getalldevs()
+	# 	own = iodict.get(o)
+	# 	#messages.error(request, f"Calculating ownership {own} from M+hub\n")
+	# 	try :
+	# 		LoT_imei_owner = [(int(i['imei']),own) for i in adevs if i['imei'] != '-'] # bad device
+	# 		Dev.update_owner(LoT_imei_owner)
+	# 	except Exception as e:
+	# 		print(f'update_owner error in {own} : {e}')
+	try:
+		d = MonthlyReportGM()
+		dfile = f"{settings.MEDIA_URL}{d.filename.replace(DBconx.data_folder, 'data')}"
+		last_mon = (dt.datetime.today().replace(day=1)-timedelta(days=1)).strftime('%B')
+		my_dict = {'filesaved' : dfile, 'last_mon':last_mon}
+	except Exception as e:
+		my_dict = {'filesaved' : f"Try again, Is file open? {e}"}
+	return render(request, 'home/tools_gmon_ok.html', my_dict)
+
+@login_required(login_url='/admin/login')
+def tools_vs_rep(request):
+	try:
+		r = VSReport()
+		r.makereport()
+		dfile = f"{settings.MEDIA_URL}{r.filename.replace(DBconx.data_folder, 'data')}"
+		my_dict = {'filesaved' : dfile}
+	except Exception as e:
+		my_dict = {'filesaved' : f"Some error, {e}"}
+	return render(request, 'home/tools_vs_ok.html', my_dict)
+
+@api_view(['GET'])
+@login_required(login_url='/admin/login')
+def tools_json(request):
+	last1 = Eliot.objects.all().order_by('-metadata_receivedtime')[:10] #latest('metadata_receivedtime') # [:5] .latest() metadata_receivedtime
+	serializer = EliotSerializer(last1, many=True)
+	return JsonResponse(serializer.data, safe=False)
+
+# /eliot/bpn
+#@cache_page(300) # this cache slows live data feed
+@csrf_exempt
+#@require_POST
+def eliot(request):  # redis data needs update in post
+
+	if request.method == 'POST':
+		flatdict = FlatDict(JSONParser().parse(request), delimiter='_')
+		flatdict['metadata_deviceGroups'] = "N/A"# field.ref_values
+		post = Eliot()
+		for (k,v) in flatdict.items(): # convert o/1 to False/True
+			if v in ('true', 'True', 1, True):
+				v = True
+			if v in ('false', 'False', 0, False):
+				v = False
+			setattr(post, k.lower(), v)
+		try:
+			post.save()
+			# after save OK, run eliot/create_data.py
+			run_redis(flatdict['device_model']) # on the relevant df
+		except Exception as e:
+			with open('eliot2_error.log', 'a') as f:
+				f.write(f'\n {dt.datetime.now().isoformat()}\n')
+				f.write(f'\n unknown post save error in eliot {e}\n ')
+				for k,v in post.__dict__.items():
+					f.write(f"{k} {v}\n")
+		finally:
+			my_dict = {'intro' : 'ELIOT readings', 'script' : str(flatdict)}
+			return render(request, 'home/test_server.html', my_dict)
+
+	else : # display the results : 5 limit ordered by ts
+		sd = server_document('https://demo.medisante-group.com/eliot/eliot', resources=None)
+		eliotdict = QS_AnyMeasure(Eliot.objects.all()[:10]).asdict()
 		my_dict = {'Intro' : 'M+ hub last 6 measurements (by device time):-', 'eliotdict' : eliotdict, 'script': sd}
 		return render(request, 'home/eliot_server.html', my_dict)
+
+@cache_page(300)
+@login_required(login_url='/admin/login')
 def m1s(request):
-	aurl = 'https://awsb.ddns.net/m1/m1'
+	aurl = 'https://demo.medisante-group.com/m1/m1'
 	script = server_document(url=aurl) #, resources=None)
 	my_dict={'Intro' : 'M+.... loading', 'script': script}
 	return render(request, 'home/M+_server.html',my_dict)
 
+@login_required(login_url='/admin/login')
 def m2s(request):
-	aurl = 'https://awsb.ddns.net/m2/m2'
+	aurl = 'https://demo.medisante-group.com/m2/m2'
+	#aurl = 'http://localhost:5006/main'
+	#aurl = 'http://127.0.0.1:5014/m2/m2'
 	script = server_document(url=aurl) #, resources=None)
 	my_dict={'Intro' : 'M++.... loading', 'script': script}
 	return render(request, 'home/M+_server.html',my_dict)
 
-def m3s(request):
-	aurl = 'https://awsb.ddns.net/m3/m3'
-	script = server_document(url=aurl) #, resources=None)
-	my_dict={'Intro' : 'M+++.... loading', 'script': script}
-	return render(request, 'home/M+_server.html',my_dict)
 
-def app1(request):
-	aurl = 'https://awsb.ddns.net/app1/app1'
+@cache_page(300)
+@login_required(login_url='/admin/login')
+def m3s(request):
+	aurl = 'https://demo.medisante-group.com/m3/m3'
+	#aurl = 'http://localhost:5006/main'
 	script = server_document(url=aurl) #, resources=None)
-	my_dict={'Intro' : 'testing app1', 'script': script}
-	return render(request, 'home/M+_server.html',my_dict)
+	filelist = [(f.name, f.path, dt.datetime.fromtimestamp(f.stat().st_ctime).isoformat()) for f in scanfiles()]
+	my_dict={'Intro' : 'M+++.... loading data', 'script': script, 'files' : filelist, 'settings' : settings.MEDIA_ROOT}
+	return render(request, 'home/M+++_server.html',my_dict)
+
+@cache_page(300)
+#@login_required(login_url='/admin/login')
+def m4s(request):
+	aurl = 'https://demo.medisante-group.com/m4/m4'
+	script = server_document(url=aurl) #, resources=None)
+	my_dict={'Intro' : 'M+.... loading', 'script': script}
+	return render(request, 'home/M+++_server.html',my_dict)
+
+
+@cache_page(300)
+@login_required(login_url='/admin/login')
+def alarms(request):
+	aurl = 'https://demo.medisante-group.com/alarm/alarm'
+	script = server_document(url=aurl) #, resources=None)
+	my_dict={'Intro' : 'Pick an Org to see possible alarm profiles based on historic and theoretical data',
+			 'footer' : 'Ideally a zero measure alarm will trigger just a few times per year i.e. look for periods with probability ~<0.01 zero measures.<br/> '
+						'Two alarms (2 periods shows as dual peaks/trough) might be required to cover an Org i.e. night 03:00-09:00 day 0800-1700. <br/>'
+						'If the Theoretical does match the Actual (+/- 10%) there might be an error in the model(a), so:- <br/>'
+			 				'1. Check to see if there are enough measures, ideally these should be ~100 x days <br/>'
+			 				'2. Try adjusting the start date of analysis (start date = default 3 months) <br/>'
+	 		 '<br/>'
+			 'a. Theoretical data analysis based on single Org poisson distribution and includes any outages! <br/>'
+				'See below for full analysis'
+			,
+			 'script': script
+			 }
+	return render(request, 'home/alarms.html',my_dict)
+
+
+def send_alert_email(request):
+	from smtplib import SMTP
+	from bokeh.io import export_png
+	from email.mime.image import MIMEImage
+	from email.mime.text import MIMEText
+	from email.mime.multipart import MIMEMultipart
+	from selenium import webdriver
+	from selenium.webdriver.firefox.options import Options
+
+	x = [1, 2, 3, 4, 5]
+	y = [4, 5, 5, 7, 2]
+	p = figure(width=350, height=250)
+	p.circle(x, y, fill_color="red", size=15)
+
+	options = Options()
+	options.headless = True
+	filepath = export_png(p, filename="plot.png", webdriver=webdriver.Firefox(options=options))  # /mnt/bitnami/home/bitnami/sharepoint/data/
+
+	to_email = 'barker@bluewin.ch'
+	msg = MIMEMultipart('related')
+	msg['Subject'] = "test"
+	msg['From'] = 'andrew.barker@medisante-group.com'
+	msg['To'] = to_email
+
+	msg.attach(MIMEText("""
+	                <html>
+	                    <body>
+	                        <h1 style="text-align: center;">Simple Data Report</h1>
+	                        <p>Here could be a short description of the data.</p>
+	                        <p><img src="cid:0" alt = "pic"></p>
+	                        <p><img src=a></p>
+	                    </body>
+	                </html>""", 'html', 'utf-8'))
+
+	with open('plot.png', 'rb') as fp:
+		img = MIMEImage(fp.read())
+		img.add_header('Content-Disposition', 'inline', filename='plot.png')
+		#            img.add_header('X-Attachment-Id', '0')
+		img.add_header('Content-ID', '<0>')
+		msg.attach(img)
+
+	try:
+		with SMTP("smtp.office365.com", 587) as server:
+			server.starttls()
+			server.login('andrew.barker@medisante-group.com', 'Ulusaba@128')
+			server.send_message(msg)
+
+	except Exception as e:
+		print(f"write error to emailed_studies file : {e}")
+	return render(request, 'home/tools.html')

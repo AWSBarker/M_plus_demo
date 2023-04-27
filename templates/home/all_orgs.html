@@ -1,0 +1,25 @@
+{% extends 'home/base.html' %}
+{% load static %} <!-- all static founf in awsb.ddns.net/static. test comes from request_handler. bokeh 2.0.2 reqd -->
+{% block content %}
+<h2>Listing of all Orgs in M+hub </h2>
+<p>To add to M+ daily reports, copy ID, go to Admin then +Add M+Orgs)</p>
+<table class="table">
+    <thead>
+        <tr>
+            <th>Org name</th>
+            <th>id</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% if all_orgs %}
+    {% for id,name in all_orgs.items %}
+        <tr>
+            <td>{{ name }}</td>
+            <td>{{ id }}</td>
+        </tr>
+    {% endfor %}
+    {% endif %}
+    </tbody>
+</table>
+
+{% endblock %}

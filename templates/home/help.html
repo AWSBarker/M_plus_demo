@@ -1,0 +1,23 @@
+{% extends 'home/base.html' %}
+{% load static %}
+{% block help %}
+<head>
+	<h2>Home M+ v0.8 demo page help</h2>
+	<h2>MDaily (M+, M++, M+++, Home) : daily API call for nominated clients</h2>
+</head>
+<body>
+	{{ adata }}
+	<p> 1. BNominate Client in Admin, MDAILY, M+Orgs.
+		<ul>	a. Login to Admin, from MDAILY section select M+Orgs</ul>
+		<ul>	b. Add or edit the Org - SHOWAS field required to display Org in graphs</ul>
+		<ul>	c. New Orgs will be in the next API call, data will show afterwards</ul>
+	</p>
+	<p>
+		<li>user is {{ user }} auth {{ user.is_authenticated }} is staff {{ user.is_staff }}</li>
+		<li>request user is {{ request.user }} auth {{ request.user.is_authenticated }} is staff {{ request.user.is_staff }}</li>
+		<li>session keys {{ session.keys }}</li>
+		<li>session items {{ session.items }}</li>
+		<li>session age {{ session.get_expiry_age }}</li>
+	</p>
+</body>
+{% endblock %}

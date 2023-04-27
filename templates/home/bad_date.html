@@ -1,0 +1,30 @@
+{% extends 'home/base.html' %}
+{% load static %} <!-- all static founf in awsb.ddns.net/static. test comes from request_handler. bokeh 2.0.2 reqd -->
+{% block content %}
+<h2>Devices currently (last week) showing future dates</h2>
+<p>These devices are in list of Orgs for reports</p>
+<table class="table">
+    <thead>
+        <tr>
+            <th>org</th>
+            <th>imei</th>
+            <th>last measure date</th>
+            <th>checked on</th>
+            <th>measures</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% if bad_dates %}
+    {% for i in bad_dates %}
+        <tr>
+            <td>{{ i.org }}</td>
+            <td>{{ i.imei }}</td>
+            <td>{{ i.last_measure_at }}</td>
+            <td>{{ i.checked_on }}</td>
+            <td>{{ i.count }}</td>
+        </tr>
+    {% endfor %}
+    {% endif %}
+    </tbody>
+</table>
+{% endblock %}

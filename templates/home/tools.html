@@ -1,0 +1,34 @@
+{% extends "home/base.html" %}
+{% block content %}
+<h2>TOOLS</h2>
+		<a href=""></a><br>
+		<p><a href="/tools/gmon" title="Update/check ownerships then calculate and Download last months active/dormant report for GM trial">
+			1. Download GM Monthly report for <strong>LAST MONTH ({{ last_mon }}) </strong> </a></p>
+			 <p>It takes around 90 seconds to check ownerships and each device in each Org
+			 A confirmation will appear below when download is ready, the file is stored in Lightsail/sharepoint</p>
+	    <p>
+        {% if messages %}
+            {% for message in messages %}
+                {{message}}
+            {% endfor %}
+        {% endif %}
+    	</p>
+		<p><a href="/tools/vs_rep" title="VS status report">2. VS Status report </a></p>
+		<p><a href="/tools/imei" title="Input IMEI get current status">3. Lookup IMEI details (owner Org name etc)</a></p>
+		<p><a href="/tools/orgs" title="Input Org get current status">4. Lookup Orgs</a></p>
+		<p><a href="/tools/json" title="Raw JSON webhook data, use browser back arrow to return to this menu">5. Raw JSON webhook data (ELIOT last 3 measurements)</a></p>
+		<p><a href="/tools/bad_date" title="Current Devices with future dates">6. Devices currently reporting suspect dates (future date)</a></p>
+		<p><a href="/tools/file_download" title="Download files from server">7. Download files from server</a></p>
+		<p><a href="/tools/uptime" title="Uptime alerts heatmap">8. Uptime alerts heatmap</a></p>
+		<p><a href="/alarm/alarm" title="Alarm setting tool">9. Alarm setting tool</a></p>
+        <a href=""></a>
+{% endblock %}
+
+<!--
+{% if user.is_authenticated %}
+    <p>Your account doesn't have access to this page</p>
+{% else %}
+    <p>Please login to see this page.</p>
+{% endif %}
+-->
+

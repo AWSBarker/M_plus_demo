@@ -1,0 +1,24 @@
+{% extends 'home/base.html' %}
+{% load static %} <!-- all static founf in awsb.ddns.net/static. test comes from request_handler. bokeh 2.0.2 reqd -->
+{% block content %}
+<form action = '' method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <div>Recent :
+        {% if list_imei %}
+            {% for i in list_imei %}
+                <a>{{ i|cut:'' }},</a>
+            {% endfor %}
+        {% endif %}
+        {{ request.user.name }}
+    </div>
+    <p><input type="submit" value="Submit"></p>
+    <p>
+        {% if messages %}
+            {% for message in messages %}
+                {{message}}
+            {% endfor %}
+        {% endif %}
+    </p>
+</form>
+{% endblock %}

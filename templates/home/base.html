@@ -1,0 +1,67 @@
+<html>
+<head>{% load static %}
+	<link rel="stylesheet" href="{% static 'css/template.css' %}">
+	<meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=yes">
+	<link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}">
+	<link rel="icon" type="image/png" sizes="16x16" href="{% static 'favicon-16x16.png' %}">
+	<!-- <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous"> -->
+ 	<title>{% block title %}demo{% endblock %}</title>
+</head>
+ <body>
+	<div class="sidenav">
+		<a href="/">Home</a>
+		<a href="https://devices.medisante.net" target="_blank">M+hub</a>
+		<a href="https://medisante-group.com" target="_blank">M+site</a>
+		<a href=""></a><br>
+		<a href="/eliot/bp">Eliot</a><br>
+		<a href="/itasc">Pairing</a><br>
+		<a href="/m4/mhub">Billing</a><br>
+		<a href=""></a><br>
+		<img src="{% static 'M+hub_icon.png' %}" class="about-img" alt="M+">
+		<a href="">Private Area  .</a>
+		<a href=""></a><br>
+		<br>
+		{% if request.user.is_authenticated  %}
+			<a href="/admin">Admin</a>
+			<a href="/home2">Dash</a>
+			<a href="/m1/mhub" >M+</a>
+			<a href="/m2/mhub">M++</a>
+			<a href="/m3/mhub">M+++</a>
+			<a href="/trials/search">Trials</a>
+			<br>
+			<a href="/library">Matrix </a>
+			<a href="/tools">Tools </a>
+			<a href="/help">Help </a>
+		{% else %}
+			<a href="/admin">.   Login</a>
+		{% endif %}
+		<a href=""></a>
+		<a href=""></a>
+		<a href=""></a>
+		<a href=""></a>
+	</div>
+	<div class="main">
+		<div class="row justify-content-center">
+			<div class="col-2">
+				<h3 class="top">Demo only - not for clinical use. Only M+ JSON and basic authentication</h3>
+				<!-- {% block title2 %}
+				<hr class="mt-0 mb-4">
+				{% endblock %} -->
+				{% block home %}
+				{% endblock %}
+				{% block content %}
+				{% endblock %}
+				{% block content2 %}
+				{% endblock %}
+				{% block content3 %}
+				{% endblock %}
+				{% block help %}
+				{% endblock %}
+			</div>
+			<div class="row justify-content-right">
+            </div>
+		</div>
+	</div>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{% extends 'home/base.html' %}
+{% load static %} <!-- all static founf in awsb.ddns.net/static. test comes from request_handler. bokeh 2.0.2 reqd -->
+{% block content %}
+<head>
+    <h2>M+hub 24hr Uptime : hourly uptime checked every 15 minutes. Last check was at {{ last_checked }} UTC</h2>
+	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-2.4.3.min.js" crossorigin="anonymous"></script>
+	<!--- COPY/PASTE SCRIPT HERE -->
+	{{ script | safe }}
+</head>
+<body>
+	<div>
+<!-- COPY/PASTE divs HERE-->
+		{{ div | safe }}
+		<p><img src="https://demo.medisante-group.com/data/past2hours.png" alt = "pic"></p>
+	</div>
+</body>
+{% endblock %}

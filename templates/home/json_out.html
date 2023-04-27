@@ -1,0 +1,9 @@
+{% extends 'home/getimei.html' %}
+{% block content3 %}
+
+<script src="https://cdn.bokeh.org/bokeh/release/bokeh-2.4.3.min.js" crossorigin="anonymous"></script>
+ {{ script | safe }}
+	{{ div | safe }}
+	<h2>Current status</h2>
+	<pre>{{ jsondata | safe }}</pre>
+{% endblock %}

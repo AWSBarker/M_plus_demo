@@ -1,0 +1,43 @@
+{% extends 'home/base.html' %}
+{% load static %} <!-- all static founf in awsb.ddns.net/static. bokeh 2.3.0 works -->
+{% block content %}
+<head>
+	<h2> {{ Intro | safe }} </h2>
+	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-2.4.3.min.js" crossorigin="anonymous"></script>
+	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-widgets-2.4.3.min.js" crossorigin="anonymous"></script>
+	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-tables-2.4.3.min.js" crossorigin="anonymous"></script>
+	<!--- COPY/PASTE SCRIPT HERE
+		<script src="https://cdn.bokeh.org/bokeh/release/bokeh-mathjax-2.4.3.min.js" crossorigin="anonymous"></script>
+	-->
+		<table class = 'table1'>
+			<tr>
+				<th align="left">Timestamp</th>
+				<th>Local Tz</th>
+				<th>Device IMEI</th>
+				<th>Model</th>
+				<th>Measured</th>
+			</tr>
+			{% for r in eliotdict %}
+			<tr>
+				<td> {{ r.ts }}</td>
+				<td> {{ r.device_timezone }}</td>
+				<td> {{ r.device_imei }}</td>
+				<td> {{ r.device_model }}</td>
+				<td> {{ r.val }}</td>
+			</tr>
+			{% endfor %}
+		</table>
+		<p> </p>
+	<!--- 	{% load cache %}
+	{% cache 300 eliot %}
+	{% endcache %} 	-->
+	<h2> Select a device type</h2>
+	{{ script | safe }}
+</head>
+<body>
+	<div>
+<!-- COPY/PASTE divs HERE-->
+		{{ div | safe }}
+	</div>
+</body>
+{% endblock %}

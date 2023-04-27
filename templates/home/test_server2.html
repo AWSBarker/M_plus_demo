@@ -1,0 +1,21 @@
+{% extends 'home/base.html' %}
+{% load static %} <!-- all static founf in awsb.ddns.net/static -->
+{% block content %}
+<head>
+	<h2> {{ Intro | safe }} </h2>
+	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-2.0.2.min.js" crossorigin="anonymous"></script>
+	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-widgets-2.0.2.min.js" crossorigin="anonymous"></script>
+	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-tables-2.0.2.min.js" crossorigin="anonymous"></script>
+	<!--- COPY/PASTE SCRIPT HERE -->
+		{% for r in script %}
+			<ul> {{ r.measurements_timestamp }}   : {{ r.device_id }}</ul>
+				<li>Diastolic {{ r.measurements_diastolicBloodPressure_value }} Systolic {{ r.measurements_systolicBloodPressure_value }}  Pulse {{ r.measurements_pulse_value }}</li>
+		{% endfor %}
+</head>
+<body>
+	<div>
+<!-- COPY/PASTE divs HERE
+		{{ div | safe }}-->
+	</div>
+</body>
+{% endblock %}

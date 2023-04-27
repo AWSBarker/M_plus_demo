@@ -7,24 +7,30 @@
 	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-2.4.3.min.js" crossorigin="anonymous"></script>
 	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-widgets-2.4.3.min.js" crossorigin="anonymous"></script>
 	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-tables-2.4.3.min.js" crossorigin="anonymous"></script>
+	<!--- COPY/PASTE SCRIPT HERE -->
 		{{ script | safe }}
-<!-- COPY/PASTE SCRIPT above -->
 </head>
+	<p><small>	{{ footer | safe }} </small></p>
 <body>
-	<div>
-		{{ div | safe }}
-<!-- COPY/PASTE divs HERE
-	<iframe src="https://demo.medisante-group.com/m1/m1" style="overflow:hidden;height:400px;width: 90%;
-    -moz-transform-origin: top left;
-    -webkit-transform-origin: top left;
-    -o-transform-origin: top left;
-    -ms-transform-origin: top left;
-    transform-origin: top left;" height="460" frameborder="0"></iframe>
+<!--
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Dated</th>
+                <th>File / URL</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% if files %}
+            {% for i in files %}
+            <tr>
+                <td>{{ i.2 }}</td>
+                <td><a href="/data/{{ i.0 }}" target="_blank">{{ i.0 }}</a></td>
+            </tr>
+            {% endfor %}
+        {% endif %}
+        </tbody>
+    </table>
     -->
-	</div>
 </body>
 {% endblock %}
-
-
-
-

@@ -1,0 +1,23 @@
+{% extends 'home/base.html' %}
+{% load static %} <!-- all static founf in awsb.ddns.net/static. test comes from request_handler. bokeh 2.0.2 reqd -->
+{% block content %}
+<h2>Files available for download (past 24 hours)</h2>
+<table class="table">
+    <thead>
+        <tr>
+            <th>Dated</th>
+            <th>File / URL</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% if files %}
+        {% for i in files %}
+        <tr>
+            <td>{{ i.2 }}</td>
+            <td><a href="/data/{{ i.0 }}" target="_blank">{{ i.0 }}</a></td>
+        </tr>
+        {% endfor %}
+    {% endif %}
+    </tbody>
+</table>
+{% endblock %}

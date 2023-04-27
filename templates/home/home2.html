@@ -1,0 +1,13 @@
+{% extends 'home/base.html' %}
+{% load static %}
+{% block home %}
+<head>
+	<script src="https://cdn.bokeh.org/bokeh/release/bokeh-2.4.3.min.js" crossorigin="anonymous"></script>
+	<h2>Dashboard : Main client device fleet, useage and new devices</h2>
+	<p>{{ script | safe }} {{ div | safe }}</p>
+	<p>Last DB update @ {{ last_record.checked_on }} with last measure at {{ last_record.last_measure_at }}</p>
+</head>
+<body>
+	{{ script2 | safe }} {{ div2 | safe }}
+</body>
+{% endblock %}
